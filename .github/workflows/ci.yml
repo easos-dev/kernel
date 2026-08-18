@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust checks in Debian container
+        run: |
+          docker compose --profile tools run --rm dev cargo fmt --check
+          docker compose --profile tools run --rm dev cargo clippy --all-targets --locked -- -D warnings
+          docker compose --profile tools run --rm dev cargo test --locked
+      - name: End-to-end lifecycle in Debian container
+        run: |
+          docker compose up --build -d kernel
+          docker compose exec -T kernel /workspace/scripts/e2e.sh
+      - name: Container logs
+        if: always()
+        run: docker compose logs kernel

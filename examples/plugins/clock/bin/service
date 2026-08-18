@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+stop=0
+trap 'stop=1' TERM INT
+
+printf 'clock started; config=%s\n' "$EASOS_PLUGIN_CONFIG_PATH"
+while [ "$stop" -eq 0 ]; do
+  date -u '+%Y-%m-%dT%H:%M:%SZ'
+  sleep 1 &
+  wait $! || true
+done
+printf '%s\n' 'clock stopped'

@@ -1,0 +1,44 @@
+services:
+  kernel:
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    environment:
+      EASOS_HOME: /var/lib/easos
+      RUST_LOG: info
+    volumes:
+      - ./runtime:/var/lib/easos
+      - .:/workspace:ro
+    tmpfs:
+      - /var/lib/easos/run:mode=0755
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/easos", "list"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+
+  dev:
+    image: debian:trixie-slim
+    profiles: ["tools"]
+    working_dir: /workspace
+    environment:
+      CARGO_HOME: /cargo
+      DEBIAN_FRONTEND: noninteractive
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        apt-get update >/dev/null &&
+        apt-get install -y --no-install-recommends ca-certificates cargo rustc rustfmt rust-clippy >/dev/null &&
+        exec "$@"
+      - tools
+    volumes:
+      - .:/workspace
+      - cargo-registry:/cargo/registry
+      - cargo-target:/workspace/target
+
+volumes:
+  cargo-registry:
+  cargo-target:

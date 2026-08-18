@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "id": "clock",
+  "name": "Example Clock",
+  "version": "0.1.0",
+  "kind": "process",
+  "runtime": {
+    "entrypoint": "bin/service",
+    "args": [],
+    "environment": {},
+    "stop_timeout_ms": 3000
+  },
+  "provides": [
+    "example.clock.v1"
+  ],
+  "requires": [
+    "kernel"
+  ]
+}

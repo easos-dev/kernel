@@ -1,0 +1,15 @@
+[Unit]
+Description=EasOS Kernel
+After=local-fs.target
+
+[Service]
+Type=simple
+Environment=EASOS_HOME=@EASOS_HOME@
+ExecStart=@EASOS_HOME@/plugins/kernel/bin/easos-kerneld --root @EASOS_HOME@
+Restart=always
+RestartSec=2
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

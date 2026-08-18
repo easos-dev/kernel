@@ -1,0 +1,28 @@
+[package]
+name = "easos-kernel"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal EasOS plugin lifecycle kernel"
+publish = false
+
+[[bin]]
+name = "easos-kerneld"
+path = "src/bin/easos-kerneld.rs"
+
+[[bin]]
+name = "easos"
+path = "src/bin/easos.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive", "env"] }
+libc = "0.2"
+semver = { version = "1.0", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tokio = { version = "1.44", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+tempfile = "3.19"
