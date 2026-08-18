@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "id": "kernel",
+  "name": "EasOS Kernel",
+  "version": "0.1.0",
+  "kind": "builtin",
+  "provides": [
+    "kernel.lifecycle.v1"
+  ],
+  "requires": []
+}

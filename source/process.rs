@@ -6,8 +6,8 @@ use std::time::Duration;
 use tokio::process::{Child, Command};
 
 use crate::error::{KernelError, Result};
-use crate::layout::{write_json_atomic, Layout};
-use crate::model::{PluginManifest, PluginRuntimeConfig, DATA_SCHEMA_VERSION};
+use crate::layout::Layout;
+use crate::model::PluginManifest;
 
 struct ManagedProcess {
     child: Child,
@@ -47,12 +47,7 @@ impl ProcessManager {
         self.last_exit.remove(id);
     }
 
-    pub async fn start(
-        &mut self,
-        layout: &Layout,
-        manifest: &PluginManifest,
-        runtime_config: &PluginRuntimeConfig,
-    ) -> Result<()> {
+    pub async fn start(&mut self, layout: &Layout, manifest: &PluginManifest) -> Result<()> {
         self.refresh()?;
         if self.is_running(&manifest.id) {
             return Ok(());
@@ -70,8 +65,7 @@ impl ProcessManager {
             )));
         }
 
-        let config_file = layout.plugin_runtime_config(&manifest.id);
-        write_json_atomic(&config_file, runtime_config)?;
+        let config_file = layout.plugin_config_file(&manifest.id);
         let log_file = layout.plugin_log(&manifest.id);
         if let Some(parent) = log_file.parent() {
             fs::create_dir_all(parent)?;
@@ -90,6 +84,7 @@ impl ProcessManager {
             .env("EASOS_PLUGIN_ID", &manifest.id)
             .env("EASOS_PLUGIN_HOME", &plugin_dir)
             .env("EASOS_PLUGIN_CONFIG_PATH", &config_file)
+            .env("EASOS_HOME", &layout.root)
             .stdin(Stdio::null())
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr))
@@ -149,17 +144,6 @@ impl ProcessManager {
         for id in ids.into_iter().rev() {
             let _ = self.stop(&id).await;
         }
-    }
-}
-
-pub fn runtime_config(
-    id: &str,
-    settings: BTreeMap<String, serde_json::Value>,
-) -> PluginRuntimeConfig {
-    PluginRuntimeConfig {
-        schema_version: DATA_SCHEMA_VERSION,
-        plugin_id: id.to_owned(),
-        settings,
     }
 }
 

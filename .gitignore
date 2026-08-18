@@ -1,5 +1,7 @@
 /target/
+/bin/*
+!/bin/.gitkeep
 /.idea/
 /.vscode/
 /.DS_Store
-/runtime/
+/docs/evidence/

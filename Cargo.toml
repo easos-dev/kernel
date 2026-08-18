@@ -5,13 +5,16 @@ edition = "2021"
 description = "Minimal EasOS plugin lifecycle kernel"
 publish = false
 
+[lib]
+path = "source/lib.rs"
+
 [[bin]]
 name = "easos-kerneld"
-path = "src/bin/easos-kerneld.rs"
+path = "source/bin/easos-kerneld.rs"
 
 [[bin]]
 name = "easos"
-path = "src/bin/easos.rs"
+path = "source/bin/easos.rs"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive", "env"] }

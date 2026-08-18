@@ -20,7 +20,7 @@ jobs:
       - name: End-to-end lifecycle in Debian container
         run: |
           docker compose up --build -d kernel
-          docker compose exec -T kernel /workspace/scripts/e2e.sh
+          docker compose exec -T kernel /easos/kernel/source/scripts/e2e.sh
       - name: Container logs
         if: always()
         run: docker compose logs kernel

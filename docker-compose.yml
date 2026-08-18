@@ -5,13 +5,13 @@ services:
       target: runtime
     restart: unless-stopped
     environment:
-      EASOS_HOME: /var/lib/easos
+      EASOS_HOME: /easos
+      EASOS_RUNTIME_HOME: /run/easos
       RUST_LOG: info
     volumes:
-      - ./runtime:/var/lib/easos
-      - .:/workspace:ro
+      - ..:/easos
     tmpfs:
-      - /var/lib/easos/run:mode=0755
+      - /run/easos:mode=0755
     healthcheck:
       test: ["CMD", "/usr/local/bin/easos", "list"]
       interval: 5s
@@ -22,9 +22,10 @@ services:
   dev:
     image: debian:trixie-slim
     profiles: ["tools"]
-    working_dir: /workspace
+    working_dir: /easos/kernel
     environment:
       CARGO_HOME: /cargo
+      CARGO_TARGET_DIR: /target
       DEBIAN_FRONTEND: noninteractive
     entrypoint:
       - /bin/sh
@@ -35,9 +36,9 @@ services:
         exec "$@"
       - tools
     volumes:
-      - .:/workspace
+      - ..:/easos
       - cargo-registry:/cargo/registry
-      - cargo-target:/workspace/target
+      - cargo-target:/target
 
 volumes:
   cargo-registry:

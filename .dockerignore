@@ -1,3 +1,4 @@
 .git
-runtime
+bin
+docs/evidence
 target

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::KernelError;
-use crate::model::{Inventory, PluginConfig, PluginView};
+use crate::model::{Inventory, PluginSettings, PluginView};
 
 pub const CONTROL_PROTOCOL_VERSION: u32 = 1;
 
@@ -98,7 +98,7 @@ impl ControlResponse {
 pub enum ControlData {
     Inventory(Inventory),
     Plugin(PluginView),
-    Config(PluginConfig),
+    Config(PluginSettings),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 
 use semver::Version;
@@ -134,6 +134,14 @@ impl RuntimeSpec {
                 "runtime.entrypoint must stay inside the plugin directory".to_owned(),
             ));
         }
+        if !matches!(
+            path.components().next(),
+            Some(Component::Normal(directory)) if directory == "bin"
+        ) {
+            return Err(KernelError::InvalidData(
+                "runtime.entrypoint must be located under bin/".to_owned(),
+            ));
+        }
         if self.stop_timeout_ms == 0 || self.stop_timeout_ms > 60_000 {
             return Err(KernelError::InvalidData(
                 "runtime.stop_timeout_ms must be between 1 and 60000".to_owned(),
@@ -143,61 +151,70 @@ impl RuntimeSpec {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PluginConfig {
-    #[serde(default)]
-    pub autostart: bool,
+pub struct PluginSettings {
+    pub schema_version: u32,
     #[serde(default)]
     pub settings: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct KernelConfig {
+pub struct KernelState {
     pub schema_version: u32,
     #[serde(default)]
-    pub plugins: BTreeMap<String, PluginConfig>,
+    pub autostart: BTreeSet<String>,
 }
 
-impl Default for KernelConfig {
+impl Default for PluginSettings {
     fn default() -> Self {
-        let mut plugins = BTreeMap::new();
-        plugins.insert(
-            KERNEL_PLUGIN_ID.to_owned(),
-            PluginConfig {
-                autostart: true,
-                settings: BTreeMap::new(),
-            },
-        );
         Self {
             schema_version: DATA_SCHEMA_VERSION,
-            plugins,
+            settings: BTreeMap::new(),
         }
     }
 }
 
-impl KernelConfig {
+impl PluginSettings {
     pub fn validate(&self) -> Result<()> {
         if self.schema_version != DATA_SCHEMA_VERSION {
             return Err(KernelError::InvalidData(format!(
-                "kernel config uses schema_version {}, expected {}",
+                "plugin config uses schema_version {}, expected {}",
                 self.schema_version, DATA_SCHEMA_VERSION
             )));
-        }
-        for id in self.plugins.keys() {
-            validate_identifier(id, "configured plugin id")?;
         }
         Ok(())
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PluginRuntimeConfig {
-    pub schema_version: u32,
-    pub plugin_id: String,
-    pub settings: BTreeMap<String, Value>,
+impl Default for KernelState {
+    fn default() -> Self {
+        Self {
+            schema_version: DATA_SCHEMA_VERSION,
+            autostart: BTreeSet::new(),
+        }
+    }
+}
+
+impl KernelState {
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != DATA_SCHEMA_VERSION {
+            return Err(KernelError::InvalidData(format!(
+                "kernel state uses schema_version {}, expected {}",
+                self.schema_version, DATA_SCHEMA_VERSION
+            )));
+        }
+        for id in &self.autostart {
+            validate_identifier(id, "autostart plugin id")?;
+            if id == KERNEL_PLUGIN_ID {
+                return Err(KernelError::InvalidData(
+                    "kernel must not appear in the autostart list".to_owned(),
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -285,6 +302,17 @@ mod tests {
     fn entrypoint_cannot_escape_plugin_directory() {
         let runtime = RuntimeSpec {
             entrypoint: "../service".to_owned(),
+            args: Vec::new(),
+            environment: BTreeMap::new(),
+            stop_timeout_ms: 1_000,
+        };
+        assert!(runtime.validate().is_err());
+    }
+
+    #[test]
+    fn entrypoint_must_be_inside_bin_directory() {
+        let runtime = RuntimeSpec {
+            entrypoint: "source/service".to_owned(),
             args: Vec::new(),
             environment: BTreeMap::new(),
             stop_timeout_ms: 1_000,

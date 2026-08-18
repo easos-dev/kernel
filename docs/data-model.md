@@ -1,18 +1,10 @@
-# V1 数据结构
+# Kernel V1 数据结构
 
-V1 只保留三个持久化/运行时事实源。
+V1 只保留三个持久化事实源和一个运行时控制协议。
 
-```mermaid
-flowchart TD
-    M["Manifest/main.json\n插件声明"] --> D["目录扫描\n得出已安装状态"]
-    C["config/kernel.json\nKernel 管理的期望状态"] --> S["启动插件"]
-    D --> S
-    S --> R["run/plugins/id/config.json\n本次运行快照"]
-```
+## 1. 主 Manifest
 
-## 1. Plugin Manifest
-
-位置：`plugins/<id>/Manifest/main.json`
+位置：`easos/<plugin-id>/manifest/main.json`
 
 ```json
 {
@@ -32,65 +24,56 @@ flowchart TD
 }
 ```
 
-| 字段 | 类型 | 约束 |
-|---|---|---|
-| `schema_version` | `u32` | V1 固定为 `1` |
-| `id` | string | 1–64 位；字母、数字、`.`、`-`、`_`；必须与目录名相同 |
-| `name` | string | 非空展示名 |
-| `version` | semver | 插件实现版本，不参与安装状态判断 |
-| `kind` | enum | `kernel` 固定为 `builtin`；普通插件固定为 `process` |
-| `runtime.entrypoint` | relative path | 只能位于插件目录内 |
-| `runtime.args` | string[] | 启动参数 |
-| `runtime.environment` | map<string,string> | 插件专属环境变量 |
-| `runtime.stop_timeout_ms` | u64 | `1..=60000`，超时后强制结束 |
-| `provides` | string[] | 对外能力标识，V1 仅声明 |
-| `requires` | plugin-id[] | 启动顺序和停卸保护依赖 |
+| 字段 | 约束 |
+|---|---|
+| `schema_version` | V1 固定为 `1` |
+| `id` | 1–64 位安全标识；必须等于插件目录名 |
+| `version` | SemVer |
+| `kind` | `kernel` 为 `builtin`；其他插件为 `process` |
+| `runtime.entrypoint` | 相对路径，必须位于 `bin/` |
+| `runtime.args` | 启动参数数组 |
+| `runtime.environment` | 插件进程环境变量 |
+| `runtime.stop_timeout_ms` | `1..=60000` |
+| `provides` | 能力声明；V1 仅展示 |
+| `requires` | 插件依赖；用于启停顺序和停卸保护 |
 
-规则：未知字段直接拒绝；`process` 必须有 `runtime`；`builtin` 仅保留给受保护的 `kernel` 且不能有 `runtime`；包内不接受符号链接。
+未知字段直接拒绝。附加 Manifest 可放在同一 `manifest/` 目录，Kernel V1 只读取 `main.json`。
 
-## 2. Kernel Config
+## 2. 插件配置
 
-位置：`config/kernel.json`
-
-```json
-{
-  "schema_version": 1,
-  "plugins": {
-    "kernel": {
-      "autostart": true,
-      "settings": {}
-    },
-    "clock": {
-      "autostart": false,
-      "settings": {
-        "timezone": "Asia/Tokyo"
-      }
-    }
-  }
-}
-```
-
-`plugins` 是配置映射，不是安装清单。手工删除插件目录后，对应配置即使暂时残留，也不会让插件变成“已安装”；CLI 卸载会同步清理它。
-
-## 3. Runtime Config Snapshot
-
-位置：`run/plugins/<id>/config.json`
+位置：`easos/<plugin-id>/config/main.json`
 
 ```json
 {
   "schema_version": 1,
-  "plugin_id": "clock",
   "settings": {
     "timezone": "Asia/Tokyo"
   }
 }
 ```
 
-Kernel 在每次启动前原子生成该文件，并通过 `EASOS_PLUGIN_CONFIG_PATH` 传递路径。插件只读，不反写 Kernel 配置。
+配置属于插件本身。CLI 修改后原子写回该文件；Kernel 启动插件时通过 `EASOS_PLUGIN_CONFIG_PATH` 传递其绝对路径，不再生成配置快照。
+
+## 3. Kernel 生命周期状态
+
+位置：`easos/kernel/config/state.json`
+
+```json
+{
+  "schema_version": 1,
+  "autostart": ["clock"]
+}
+```
+
+此文件只保存自动启动插件 ID，不保存安装列表和插件业务配置：
+
+- 安装状态来自工作区目录扫描。
+- 插件设置来自各自的 `config/main.json`。
+- 卸载插件时同步从 `autostart` 删除其 ID。
 
 ## 4. CLI 控制协议
 
-传输：本机 Unix Domain Socket `run/kernel.sock`，权限 `0600`；一行一个 JSON 请求/响应，最大 1 MiB。
+传输：`/run/easos/kernel.sock`；Unix Domain Socket；一行一个 JSON；单条最大 1 MiB。
 
 请求：
 
@@ -128,20 +111,16 @@ Kernel 在每次启动前原子生成该文件，并通过 `EASOS_PLUGIN_CONFIG_
 }
 ```
 
-## 5. 后续插件间调用
+控制协议只服务 CLI 与 Kernel 生命周期管理，不等同于下一阶段插件间业务调用协议。
 
-生命周期控制通道与业务调用通道分开。下一阶段由 Kernel 为一次服务连接创建 `SocketPair`，把两端分别交给调用方和服务方；SDK 负责帧结构、请求 ID、超时、错误码与版本协商。Kernel 只做发现和连接撮合，不解析业务负载。
+## 5. 运行时环境变量
 
-建议首版帧头固定为：
+| 变量 | 内容 |
+|---|---|
+| `EASOS_HOME` | 整个 EasOS 工作区，例如 `/easos` |
+| `EASOS_RUNTIME_HOME` | Socket、PID、日志目录，例如 `/run/easos` |
+| `EASOS_PLUGIN_ID` | 当前插件 ID |
+| `EASOS_PLUGIN_HOME` | 当前插件目录 |
+| `EASOS_PLUGIN_CONFIG_PATH` | 当前插件 `config/main.json` 的绝对路径 |
 
-| 字段 | 类型 | 作用 |
-|---|---|---|
-| `protocol_version` | `u16` | SDK 协议版本 |
-| `message_type` | `u8` | request / response / event / cancel |
-| `request_id` | `u64` | 请求关联 |
-| `service` | string | `provides` 中声明的能力 |
-| `method` | string | 服务方法 |
-| `deadline_unix_ms` | `u64?` | 超时边界 |
-| `payload` | bytes | 业务负载；V1 SDK 可先用 JSON |
-
-这部分暂不写入 Kernel V1 代码，避免把生命周期内核与业务 RPC 绑定。
+运行态文件不写入插件目录；插件目录只保留可持久化、可检查、可发布的内容。

@@ -11,9 +11,9 @@ use tracing::{error, info, warn};
 use crate::error::{KernelError, Result};
 use crate::layout::Layout;
 use crate::model::{
-    Inventory, KernelConfig, PluginKind, PluginManifest, PluginState, PluginView, KERNEL_PLUGIN_ID,
+    Inventory, KernelState, PluginKind, PluginManifest, PluginState, PluginView, KERNEL_PLUGIN_ID,
 };
-use crate::process::{runtime_config, ProcessManager};
+use crate::process::ProcessManager;
 use crate::protocol::{
     ControlCommand, ControlData, ControlRequest, ControlResponse, CONTROL_PROTOCOL_VERSION,
 };
@@ -27,8 +27,8 @@ pub struct Kernel {
 }
 
 impl Kernel {
-    pub fn new(root: impl Into<PathBuf>) -> Result<Self> {
-        let layout = Layout::new(root);
+    pub fn new(root: impl Into<PathBuf>, runtime_root: impl Into<PathBuf>) -> Result<Self> {
+        let layout = Layout::new(root, runtime_root);
         layout.init()?;
         Ok(Self {
             layout,
@@ -59,12 +59,6 @@ impl Kernel {
             ControlCommand::Install { source } => {
                 let manifest = registry::install(&self.layout, Path::new(&source))?;
                 self.processes.forget(&manifest.id);
-                let mut config = self.layout.read_kernel_config()?;
-                config.plugins.entry(manifest.id.clone()).or_default();
-                if let Err(error) = self.layout.write_kernel_config(&config) {
-                    let _ = registry::uninstall(&self.layout, &manifest.id);
-                    return Err(error);
-                }
                 Ok(ControlData::Plugin(self.plugin_view(&manifest.id)?))
             }
             ControlCommand::Uninstall { id } => {
@@ -85,9 +79,9 @@ impl Kernel {
                     )));
                 }
                 registry::uninstall(&self.layout, &id)?;
-                let mut config = self.layout.read_kernel_config()?;
-                config.plugins.remove(&id);
-                self.layout.write_kernel_config(&config)?;
+                let mut state = self.layout.read_kernel_state()?;
+                state.autostart.remove(&id);
+                self.layout.write_kernel_state(&state)?;
                 self.processes.forget(&id);
                 Ok(ControlData::Inventory(self.inventory()?))
             }
@@ -117,42 +111,39 @@ impl Kernel {
                 self.ensure_mutable(&id)?;
                 let snapshot = registry::scan(&self.layout)?;
                 self.require_manifest(&snapshot, &id)?;
-                let mut config = self.layout.read_kernel_config()?;
-                config.plugins.entry(id.clone()).or_default().autostart = enabled;
-                self.layout.write_kernel_config(&config)?;
+                let mut state = self.layout.read_kernel_state()?;
+                if enabled {
+                    state.autostart.insert(id.clone());
+                } else {
+                    state.autostart.remove(&id);
+                }
+                self.layout.write_kernel_state(&state)?;
                 Ok(ControlData::Plugin(self.plugin_view(&id)?))
             }
             ControlCommand::GetConfig { id } => {
                 let snapshot = registry::scan(&self.layout)?;
                 self.require_manifest(&snapshot, &id)?;
-                let config = self.layout.read_kernel_config()?;
-                Ok(ControlData::Config(
-                    config.plugins.get(&id).cloned().unwrap_or_default(),
-                ))
+                Ok(ControlData::Config(self.layout.read_plugin_settings(&id)?))
             }
             ControlCommand::SetConfig { id, key, value } => {
                 self.ensure_mutable(&id)?;
                 validate_config_key(&key)?;
                 let snapshot = registry::scan(&self.layout)?;
                 self.require_manifest(&snapshot, &id)?;
-                let mut config = self.layout.read_kernel_config()?;
-                let plugin_config = config.plugins.entry(id).or_default();
-                plugin_config.settings.insert(key, value);
-                let result = plugin_config.clone();
-                self.layout.write_kernel_config(&config)?;
-                Ok(ControlData::Config(result))
+                let mut settings = self.layout.read_plugin_settings(&id)?;
+                settings.settings.insert(key, value);
+                self.layout.write_plugin_settings(&id, &settings)?;
+                Ok(ControlData::Config(settings))
             }
             ControlCommand::UnsetConfig { id, key } => {
                 self.ensure_mutable(&id)?;
                 validate_config_key(&key)?;
                 let snapshot = registry::scan(&self.layout)?;
                 self.require_manifest(&snapshot, &id)?;
-                let mut config = self.layout.read_kernel_config()?;
-                let plugin_config = config.plugins.entry(id).or_default();
-                plugin_config.settings.remove(&key);
-                let result = plugin_config.clone();
-                self.layout.write_kernel_config(&config)?;
-                Ok(ControlData::Config(result))
+                let mut settings = self.layout.read_plugin_settings(&id)?;
+                settings.settings.remove(&key);
+                self.layout.write_plugin_settings(&id, &settings)?;
+                Ok(ControlData::Config(settings))
             }
         }
     }
@@ -161,37 +152,25 @@ impl Kernel {
         self.ensure_mutable(id)?;
         let snapshot = registry::scan(&self.layout)?;
         let order = dependency_order(&snapshot, id)?;
-        let config = self.layout.read_kernel_config()?;
         for plugin_id in order {
             if plugin_id == KERNEL_PLUGIN_ID {
                 continue;
             }
             let manifest = self.require_manifest(&snapshot, &plugin_id)?;
-            let settings = config
-                .plugins
-                .get(&plugin_id)
-                .map(|item| item.settings.clone())
-                .unwrap_or_default();
-            self.processes
-                .start(
-                    &self.layout,
-                    manifest,
-                    &runtime_config(&plugin_id, settings),
-                )
-                .await?;
+            self.processes.start(&self.layout, manifest).await?;
         }
         Ok(())
     }
 
     fn inventory(&mut self) -> Result<Inventory> {
         let snapshot = registry::scan(&self.layout)?;
-        let config = self.layout.read_kernel_config()?;
+        let state = self.layout.read_kernel_state()?;
         self.processes.refresh()?;
         let plugins = snapshot
             .manifests
             .values()
-            .map(|manifest| self.view(manifest, &config))
-            .collect();
+            .map(|manifest| self.view(manifest, &state))
+            .collect::<Result<Vec<_>>>()?;
         Ok(Inventory {
             plugins,
             invalid_directories: snapshot.invalid_directories,
@@ -201,35 +180,31 @@ impl Kernel {
     fn plugin_view(&mut self, id: &str) -> Result<PluginView> {
         let snapshot = registry::scan(&self.layout)?;
         let manifest = self.require_manifest(&snapshot, id)?.clone();
-        let config = self.layout.read_kernel_config()?;
+        let state = self.layout.read_kernel_state()?;
         self.processes.refresh()?;
-        Ok(self.view(&manifest, &config))
+        self.view(&manifest, &state)
     }
 
-    fn view(&self, manifest: &PluginManifest, config: &KernelConfig) -> PluginView {
-        let plugin_config = config
-            .plugins
-            .get(&manifest.id)
-            .cloned()
-            .unwrap_or_default();
+    fn view(&self, manifest: &PluginManifest, state: &KernelState) -> Result<PluginView> {
+        let settings = self.layout.read_plugin_settings(&manifest.id)?;
         let last_exit = self.processes.last_exit(&manifest.id);
-        let state = match manifest.kind {
+        let plugin_state = match manifest.kind {
             PluginKind::Builtin => PluginState::Builtin,
             PluginKind::Process if self.processes.is_running(&manifest.id) => PluginState::Running,
             PluginKind::Process if last_exit.is_some() => PluginState::Exited,
             PluginKind::Process => PluginState::Installed,
         };
-        PluginView {
+        Ok(PluginView {
             id: manifest.id.clone(),
             name: manifest.name.clone(),
             version: manifest.version.clone(),
             kind: manifest.kind.clone(),
-            state,
-            autostart: plugin_config.autostart,
+            state: plugin_state,
+            autostart: state.autostart.contains(&manifest.id),
             path: self.layout.plugin_dir(&manifest.id).display().to_string(),
             last_exit,
-            settings: plugin_config.settings,
-        }
+            settings: settings.settings,
+        })
     }
 
     fn require_manifest<'a>(
@@ -252,17 +227,17 @@ impl Kernel {
     }
 
     fn autostart_ids(&self) -> Result<Vec<String>> {
-        let config = self.layout.read_kernel_config()?;
-        Ok(config
-            .plugins
+        Ok(self
+            .layout
+            .read_kernel_state()?
+            .autostart
             .into_iter()
-            .filter_map(|(id, item)| (item.autostart && id != KERNEL_PLUGIN_ID).then_some(id))
             .collect())
     }
 }
 
-pub async fn run_daemon(root: impl Into<PathBuf>) -> Result<()> {
-    let mut kernel = Kernel::new(root)?;
+pub async fn run_daemon(root: impl Into<PathBuf>, runtime_root: impl Into<PathBuf>) -> Result<()> {
+    let mut kernel = Kernel::new(root, runtime_root)?;
     prepare_socket(&kernel.layout).await?;
     let listener = UnixListener::bind(&kernel.layout.socket_file)?;
     fs::set_permissions(

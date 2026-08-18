@@ -4,9 +4,10 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{KernelError, Result};
 use crate::layout::{read_json, Layout};
-use crate::model::{InvalidPlugin, PluginManifest, KERNEL_PLUGIN_ID};
+use crate::model::{InvalidPlugin, PluginManifest, PluginSettings, KERNEL_PLUGIN_ID};
 
-const MANIFEST_PATH: [&str; 2] = ["Manifest", "main.json"];
+const MANIFEST_PATH: [&str; 2] = ["manifest", "main.json"];
+const CONFIG_PATH: [&str; 2] = ["config", "main.json"];
 
 #[derive(Debug, Default)]
 pub struct RegistrySnapshot {
@@ -15,31 +16,23 @@ pub struct RegistrySnapshot {
 }
 
 pub fn scan(layout: &Layout) -> Result<RegistrySnapshot> {
-    let mut directories =
-        fs::read_dir(&layout.plugins_dir)?.collect::<std::io::Result<Vec<_>>>()?;
-    directories.sort_by_key(|entry| entry.file_name());
+    let mut entries = fs::read_dir(&layout.root)?.collect::<std::io::Result<Vec<_>>>()?;
+    entries.sort_by_key(|entry| entry.file_name());
 
     let mut snapshot = RegistrySnapshot::default();
-    for entry in directories {
-        let file_type = entry.file_type()?;
-        if !file_type.is_dir() {
-            continue;
-        }
+    for entry in entries {
         let directory = entry.file_name().to_string_lossy().into_owned();
-        let manifest_file = manifest_path(&entry.path());
-        if !manifest_file.is_file() {
+        if !entry.file_type()?.is_dir() {
+            snapshot.invalid_directories.push(InvalidPlugin {
+                directory,
+                error: "workspace entries must be plugin directories".to_owned(),
+            });
             continue;
         }
-        match load_manifest(&entry.path()) {
+
+        match load_plugin(&entry.path()) {
             Ok(manifest) if manifest.id == directory => {
-                if manifest.id == KERNEL_PLUGIN_ID && manifest != PluginManifest::kernel_builtin() {
-                    snapshot.invalid_directories.push(InvalidPlugin {
-                        directory,
-                        error: "kernel manifest is reserved and cannot be replaced".to_owned(),
-                    });
-                } else {
-                    snapshot.manifests.insert(manifest.id.clone(), manifest);
-                }
+                snapshot.manifests.insert(manifest.id.clone(), manifest);
             }
             Ok(manifest) => snapshot.invalid_directories.push(InvalidPlugin {
                 directory: directory.clone(),
@@ -57,9 +50,24 @@ pub fn scan(layout: &Layout) -> Result<RegistrySnapshot> {
     Ok(snapshot)
 }
 
-pub fn load_manifest(plugin_dir: &Path) -> Result<PluginManifest> {
+pub fn load_plugin(plugin_dir: &Path) -> Result<PluginManifest> {
     let manifest: PluginManifest = read_json(&manifest_path(plugin_dir))?;
     manifest.validate()?;
+
+    if !plugin_dir.join("bin").is_dir() {
+        return Err(KernelError::InvalidData(format!(
+            "plugin {} is missing bin/",
+            manifest.id
+        )));
+    }
+    if !plugin_dir.join("config").is_dir() {
+        return Err(KernelError::InvalidData(format!(
+            "plugin {} is missing config/",
+            manifest.id
+        )));
+    }
+    let settings: PluginSettings = read_json(&config_path(plugin_dir))?;
+    settings.validate()?;
     Ok(manifest)
 }
 
@@ -70,7 +78,7 @@ pub fn install(layout: &Layout, source: &Path) -> Result<PluginManifest> {
             source.display()
         )));
     }
-    let manifest = load_manifest(source)?;
+    let manifest = load_plugin(source)?;
     if manifest.id == KERNEL_PLUGIN_ID {
         return Err(KernelError::Protected(KERNEL_PLUGIN_ID.to_owned()));
     }
@@ -79,18 +87,14 @@ pub fn install(layout: &Layout, source: &Path) -> Result<PluginManifest> {
         return Err(KernelError::AlreadyExists(manifest.id));
     }
 
-    let temporary =
-        layout
-            .plugins_dir
-            .join(format!(".install-{}-{}", manifest.id, std::process::id()));
-    if temporary.exists() {
-        fs::remove_dir_all(&temporary)?;
-    }
-    if let Err(error) = copy_directory(source, &temporary) {
-        let _ = fs::remove_dir_all(&temporary);
+    if let Err(error) = copy_directory(source, &destination) {
+        let _ = fs::remove_dir_all(&destination);
         return Err(error);
     }
-    fs::rename(&temporary, &destination)?;
+    if let Err(error) = load_plugin(&destination) {
+        let _ = fs::remove_dir_all(&destination);
+        return Err(error);
+    }
     Ok(manifest)
 }
 
@@ -108,6 +112,10 @@ pub fn uninstall(layout: &Layout, id: &str) -> Result<()> {
 
 fn manifest_path(plugin_dir: &Path) -> PathBuf {
     plugin_dir.join(MANIFEST_PATH[0]).join(MANIFEST_PATH[1])
+}
+
+fn config_path(plugin_dir: &Path) -> PathBuf {
+    plugin_dir.join(CONFIG_PATH[0]).join(CONFIG_PATH[1])
 }
 
 fn copy_directory(source: &Path, destination: &Path) -> Result<()> {

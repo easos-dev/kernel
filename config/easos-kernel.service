@@ -5,7 +5,10 @@ After=local-fs.target
 [Service]
 Type=simple
 Environment=EASOS_HOME=@EASOS_HOME@
-ExecStart=@EASOS_HOME@/plugins/kernel/bin/easos-kerneld --root @EASOS_HOME@
+Environment=EASOS_RUNTIME_HOME=/run/easos
+RuntimeDirectory=easos
+RuntimeDirectoryMode=0755
+ExecStart=@EASOS_HOME@/kernel/bin/easos-kerneld --root @EASOS_HOME@ --runtime-root /run/easos
 Restart=always
 RestartSec=2
 KillSignal=SIGTERM

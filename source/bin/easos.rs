@@ -19,6 +19,13 @@ struct Args {
         global = true
     )]
     root: PathBuf,
+    #[arg(
+        long,
+        env = "EASOS_RUNTIME_HOME",
+        default_value = "/run/easos",
+        global = true
+    )]
+    runtime_root: PathBuf,
     #[command(subcommand)]
     command: Command,
 }
@@ -100,7 +107,7 @@ async fn run() -> Result<()> {
         },
     };
 
-    let layout = Layout::new(args.root);
+    let layout = Layout::new(args.root, args.runtime_root);
     let mut stream = UnixStream::connect(&layout.socket_file)
         .await
         .map_err(|error| {
