@@ -6,15 +6,15 @@ description = "Minimal EasOS plugin lifecycle kernel"
 publish = false
 
 [lib]
-path = "source/lib.rs"
+path = "lib.rs"
 
 [[bin]]
 name = "easos-kerneld"
-path = "source/bin/easos-kerneld.rs"
+path = "bin/easos-kerneld.rs"
 
 [[bin]]
 name = "easos"
-path = "source/bin/easos.rs"
+path = "bin/easos.rs"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive", "env"] }

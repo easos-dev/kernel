@@ -4,8 +4,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates cargo rustc \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
-COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
-COPY source ./source
+COPY source ./
 RUN cargo build --release --locked
 
 FROM debian:trixie-slim AS runtime

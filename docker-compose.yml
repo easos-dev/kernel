@@ -22,7 +22,7 @@ services:
   dev:
     image: debian:trixie-slim
     profiles: ["tools"]
-    working_dir: /easos/kernel
+    working_dir: /easos/kernel/source
     environment:
       CARGO_HOME: /cargo
       CARGO_TARGET_DIR: /target

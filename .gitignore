@@ -1,4 +1,4 @@
-/target/
+/source/target/
 /bin/*
 !/bin/.gitkeep
 /.idea/
